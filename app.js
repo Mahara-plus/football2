@@ -83,6 +83,8 @@ const sh=a=>a.map(x=>[Math.random(),x]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
 const LBL={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"من بنك 2000 سؤال",t:"سؤال انتقالات"};
 const QUESTION_BANK=Array.isArray(window.QUESTION_BANK)?window.QUESTION_BANK:[];
 const QUESTION_HISTORY_KEY="fbq_seen_v1";
+// In-memory session history: no question repeats across matches until the app is restarted.
+const SESSION_USED_QUESTIONS=new Set();
 const questionKey=(k,d)=>`${k}:${String(d.id||d.q||d.n||"")}`;
 function getSeen(){try{return new Set(JSON.parse(localStorage.getItem(QUESTION_HISTORY_KEY)||"[]"))}catch(e){return new Set()}}
 function setSeen(s){try{localStorage.setItem(QUESTION_HISTORY_KEY,JSON.stringify([...s].slice(-10000)))}catch(e){}}
@@ -226,7 +228,7 @@ function start(){
  for(const k of kinds){
   const all=source(k).filter(x=>(x.d==="m"||x.d==="h")&&(c.diff==="x"||x.d===c.diff));
   const unique=[],local=new Set();
-  for(const x of all){const key=questionKey(k,x);if(!local.has(key)&&!seen.has(key)){local.add(key);unique.push(x);}}
+  for(const x of all){const key=questionKey(k,x);if(!local.has(key)&&!SESSION_USED_QUESTIONS.has(key)){local.add(key);unique.push(x);}}
   queues[k]=sh(unique);
   requested+=Math.max(0,c.rounds*c[k]);
  }
