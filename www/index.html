@@ -124,6 +124,50 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"
 const sh=a=>a.map(x=>[Math.random(),x]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
 const LBL={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"من بنك 2000 سؤال",t:"سؤال انتقالات"};
 const QUESTION_BANK=Array.isArray(window.QUESTION_BANK)?window.QUESTION_BANK:[];
+const LIVE_API_BASE=(location.protocol.startsWith("http")&&! ["localhost","127.0.0.1"].includes(location.hostname)&&!location.hostname.endsWith("github.io")?location.origin:"https://football-0kb6.onrender.com");
+let LIVE_QUESTIONS=[],LIVE_SYNC_STATUS="يتم فحص تحديثات كرة القدم…",LIVE_UPDATED_AT=null,LIVE_SYNC_BUSY=false;
+function applyLiveFootballPayload(payload){
+ const rows=Array.isArray(payload.players)?payload.players:[];
+ const clubPool=[...new Set(rows.map(x=>x.currentClub).filter(Boolean))];
+ const generated=[];
+ for(const row of rows){
+  const player=D.tp.find(x=>x.n===row.name);
+  if(!player||!row.currentClub)continue;
+  player.currentClub=row.currentClub;
+  if(Array.isArray(row.path)&&row.path.length>1)player.path=row.path;
+  const difficulty=player.d||"h";
+  const distractors=clubPool.filter(x=>x!==row.currentClub);
+  if(distractors.length>=3){
+   generated.push({id:"live-current-club-"+row.apiName,q:`في أي نادٍ يلعب ${row.name} حالياً؟`,a:row.currentClub,d:difficulty,opts:[row.currentClub,...sh(distractors).slice(0,3)],live:true,updatedAt:payload.updatedAt});
+  }
+  if(row.latestTransfer&&row.latestTransfer.from&&row.latestTransfer.to){
+   const answer=row.latestTransfer.from;
+   const choices=[...new Set([answer,...clubPool.filter(x=>x!==answer)])];
+   if(choices.length>=4)generated.push({id:"live-last-transfer-"+row.apiName,q:`من أي نادٍ انتقل ${row.name} في آخر انتقال مسجل إلى ${row.latestTransfer.to}؟`,a:answer,d:difficulty,opts:sh(choices).slice(0,4),live:true,updatedAt:payload.updatedAt});
+  }
+ }
+ LIVE_QUESTIONS=generated;LIVE_UPDATED_AT=payload.updatedAt||null;
+ LIVE_SYNC_STATUS=payload.updatedAt?`آخر تحديث تلقائي: ${new Date(payload.updatedAt).toLocaleString("ar-JO")} · ${rows.length} لاعب`:(payload.lastError||"بانتظار إعداد مفتاح مصدر البيانات");
+ save();
+ const statsEl=document.getElementById("bankStats");if(statsEl)statsEl.innerHTML=bankStatsHTML();
+}
+async function syncLiveFootball(){
+ if(LIVE_SYNC_BUSY)return;LIVE_SYNC_BUSY=true;
+ try{
+  const response=await fetch(LIVE_API_BASE+"/api/live-football",{cache:"no-store",headers:{"Accept":"application/json"}});
+  if(!response.ok)throw new Error("تعذر الاتصال بخدمة تحديث البيانات");
+  const payload=await response.json();
+  applyLiveFootballPayload(payload);
+  try{localStorage.setItem("fbq_live_cache_v1",JSON.stringify(payload))}catch(e){}
+ }catch(error){
+  try{const cached=JSON.parse(localStorage.getItem("fbq_live_cache_v1")||"null");if(cached&&Array.isArray(cached.players))applyLiveFootballPayload(cached)}catch(e){}
+  if(!LIVE_UPDATED_AT)LIVE_SYNC_STATUS="تعذر التحديث حالياً؛ ستُستخدم آخر بيانات محفوظة إن وجدت.";
+  console.warn("Live football sync:",error)
+ }finally{
+  LIVE_SYNC_BUSY=false;const el=document.getElementById("liveStatus");if(el)el.textContent=LIVE_SYNC_STATUS;
+ }
+}
+setInterval(syncLiveFootball,6*60*60*1000);
 const QUESTION_HISTORY_KEY="fbq_seen_v1";
 const questionKey=(k,d)=>`${k}:${String(d.id||d.q||d.n||"")}`;
 function getSeen(){try{return new Set(JSON.parse(localStorage.getItem(QUESTION_HISTORY_KEY)||"[]"))}catch(e){return new Set()}}
@@ -205,13 +249,13 @@ function setup(){
  ${modeUI}${participants}
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
- <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div></div>
+ <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div><small id="liveStatus">${esc(LIVE_SYNC_STATUS)}</small></div>
  <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، وتصبح الأسئلة متاحة مجدداً في مباراة جديدة بعد انتهاء المباراة الحالية.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
 }
 function bankStatsHTML(){
  const labels={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"أسئلة عامة",t:"أسئلة انتقالات"};
- const src={p:D.p||[],tp:D.tp||[],g:(D.g||[]).concat(QUESTION_BANK),t:D.t||[]};
+ const src={p:D.p||[],tp:D.tp||[],g:(D.g||[]).concat(QUESTION_BANK),t:(D.t||[]).concat(LIVE_QUESTIONS)};
  return Object.keys(labels).map(k=>{
   const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
   const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
@@ -241,7 +285,7 @@ function start(){
  }
  if(!C.length){alert('أضف لاعباً واحداً على الأقل');return}
  const c=D.cfg,st={},rounds=[],seen=new Set(),usedNow=[];
- const source=k=>k==="g"?D.g.concat(QUESTION_BANK):D[k];
+ const source=k=>k==="g"?D.g.concat(QUESTION_BANK):k==="t"?D.t.concat(LIVE_QUESTIONS):D[k];
  const kinds=["p","tp","g","t"],MAX_MATCH_QUESTIONS=100;
  const queues={};
  let requested=0;
@@ -292,8 +336,9 @@ function start(){
    if(role!=="غير محدد")pool=pool.concat(ROLE_DISTRACTORS[role]||[]);
    else pool=D.tp.filter(x=>x.n!==correct).map(x=>x.n);
   }else if(k==="t"){
-   const isFee=/مليون|€|دولار|جنيه/.test(String(correct));
-   pool=isFee?D.t.map(x=>x.a).filter(x=>/مليون|€|دولار|جنيه/.test(String(x))).concat(["180 مليون يورو","150 مليون يورو","105 مليون يورو","90 مليون يورو","75 مليون يورو","60 مليون يورو"]):D.tp.flatMap(x=>x.path||[]).concat(D.t.map(x=>x.a).filter(x=>!(/مليون|€|دولار|جنيه/.test(String(x)))));
+   if(Array.isArray(d.opts))pool=d.opts;
+   else {const isFee=/مليون|€|دولار|جنيه/.test(String(correct));
+   pool=isFee?D.t.map(x=>x.a).filter(x=>/مليون|€|دولار|جنيه/.test(String(x))).concat(["180 مليون يورو","150 مليون يورو","105 مليون يورو","90 مليون يورو","75 مليون يورو","60 مليون يورو"]):D.tp.flatMap(x=>x.path||[]).concat(D.t.map(x=>x.a).filter(x=>!(/مليون|€|دولار|جنيه/.test(String(x)))));}
   }else if(k==="g"&&d.category){pool=QUESTION_BANK.filter(x=>x.category===d.category&&x.d===d.d).map(x=>x.a)}
   else if(Array.isArray(d.opts))pool=d.opts;
   else pool=source(k).map(x=>answerOf(k,x));
@@ -376,6 +421,8 @@ function add(){
  else{if(!v("q")||!v("a"))return editor("املأ السؤال والجواب");D[tab].push({d,q:v("q"),a:v("a")})}
  save();editor("تمت الإضافة ✓");
 }
+try{const cachedLive=JSON.parse(localStorage.getItem("fbq_live_cache_v1")||"null");if(cachedLive&&Array.isArray(cachedLive.players))applyLiveFootballPayload(cachedLive)}catch(e){}
+syncLiveFootball();
 home();
 </script>
 </body>

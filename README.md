@@ -62,3 +62,30 @@ The launcher icon is generated from `assets/icon-only.png`, `assets/icon-foregro
 The settings screen now reports the available unique questions per section against the requested target of 500 (250 medium and 250 very hard). The project does not claim a section is complete unless its counts reach both difficulty targets. Question IDs are tracked locally to prevent repeats within a match and across subsequent matches on the same device; the history window is retained up to 10,000 IDs. Each match remains capped at 100 questions.
 
 Note: the supplied source data currently does not contain 500 unique questions in each section. The UI reports the actual counts and the remaining gap rather than fabricating duplicate questions.
+
+## التحديث التلقائي لإجابات كرة القدم (Live Data)
+أُضيف تكامل خلفي مع API-Football لتحديث بيانات اللاعبين والانتقالات المسجلة تلقائياً، دون وضع مفتاح API داخل التطبيق أو APK.
+
+### الإعداد مرة واحدة
+1. أنشئ حساباً ومفتاح API من https://dashboard.api-football.com/ ثم افتح إعدادات خدمة Render التي تشغّل مجلد `server`.
+2. أضف متغير البيئة `FOOTBALL_API_KEY` بقيمة المفتاح.
+3. أنشئ قيمة سرية طويلة عشوائية، وأضفها في Render باسم `CRON_SECRET`.
+4. في GitHub افتح Settings → Secrets and variables → Actions وأضف:
+   - `LIVE_REFRESH_URL` = `https://YOUR-RENDER-SERVICE.onrender.com/api/refresh-live-football`
+   - `CRON_SECRET` = نفس القيمة التي وضعتها في Render.
+5. بعد رفع الملفات، شغّل Workflow باسم **Refresh live football data** مرة واحدة من Actions للتجربة. بعد ذلك يعمل تلقائياً يومياً الساعة 03:17 UTC.
+
+### ما الذي يتحدث تلقائياً؟
+- سجل انتقالات اللاعبين الذين لهم أسماء مطابقة ضمن قائمة اللاعبين المعرّفة في `server/server.js`.
+- النادي الحالي المستنتج من أحدث انتقال مسجل، مع استخدام أحدث فريق في إحصائيات اللاعب كخيار احتياطي عند عدم وجود سجل انتقال.
+- أسئلة ديناميكية جديدة مثل «في أي نادٍ يلعب اللاعب حالياً؟» و«من أي نادٍ انتقل في آخر انتقال مسجل؟» وتُنشأ خياراتها من أسماء الأندية المتاحة.
+- مسار الانتقالات في سؤال «لاعب من انتقالاته» يتحدث من بيانات المصدر عند توفر سجل كافٍ.
+
+التحديث يعمل في الخلفية كل 24 ساعة عندما يكون السيرفر مستيقظاً، كما يطلق GitHub Actions عملية التحديث اليومية. يحتفظ السيرفر بآخر نسخة ناجحة عند تعطل المصدر، ولا يستبدلها ببيانات فارغة. يمكن مشاهدة حالة التحديث من إعدادات اللعبة.
+
+### حدود مهمة
+- يلزم إدخال `FOOTBALL_API_KEY` و`CRON_SECRET` مرة واحدة في Render وGitHub؛ لا يمكن للتطبيق تخطي المصادقة أو جلب بيانات موثوقة دون مصدر API.
+- لا تتغير الحقائق التاريخية الثابتة مثل بطل كأس العالم 2018؛ الذي يتحدث هو السؤال المرتبط بحقيقة متغيرة مثل النادي الحالي أو آخر انتقال.
+- حالة «معتزل/حالي» لا تُغيّر آلياً اعتماداً على انتقال وحده؛ إعلان الاعتزال يحتاج مصدراً صريحاً موثوقاً لتجنب تصنيف خاطئ.
+- البيانات تتحدث حسب توفرها وتواتر تحديث مزود API، وليست ضماناً فورياً لحظة إعلان أي انتقال.
+- بيانات API-Football تتطلب مفتاحاً وفق وثائق المزود: https://www.api-football.com/documentation-v3
