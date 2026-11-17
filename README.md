@@ -89,3 +89,20 @@ Note: the supplied source data currently does not contain 500 unique questions i
 - حالة «معتزل/حالي» لا تُغيّر آلياً اعتماداً على انتقال وحده؛ إعلان الاعتزال يحتاج مصدراً صريحاً موثوقاً لتجنب تصنيف خاطئ.
 - البيانات تتحدث حسب توفرها وتواتر تحديث مزود API، وليست ضماناً فورياً لحظة إعلان أي انتقال.
 - بيانات API-Football تتطلب مفتاحاً وفق وثائق المزود: https://www.api-football.com/documentation-v3
+
+
+## Daily rotating question updates
+
+The server now supports a four-day rotation: `p` (player clues), `tp` (player transfer path), `g` (general questions), then `t` (transfer questions), and repeats. A successful run updates only one category and persists the next category/date in `server/daily-content-cache.json`. Failed runs do not advance the rotation.
+
+Configure the Render environment variable `FOOTBALL_CONTENT_FEED_URL` to a publicly reachable HTTPS JSON feed. The required JSON shape is demonstrated in `server/daily-content-feed.example.json`. The feed must contain current verified records for the category being refreshed; the server validates the shape but cannot independently fact-check the provider. Keep stable historical questions in the other categories. The daily GitHub Actions workflow triggers both the live-player refresh and the rotating question refresh.
+
+Endpoints: `GET /api/daily-content`, `GET /api/daily-content/status`, and protected `POST /api/refresh-daily-content` (uses the existing `CRON_SECRET`). The app fetches the latest category cache when it starts.
+
+## Daily rotating question updates
+
+The server supports a four-day rotation: `p` (player clues), `tp` (player transfer path), `g` (general questions), then `t` (transfer questions), and repeats. A successful run updates only one category and persists the next category/date in `server/daily-content-cache.json`. Failed runs do not advance the rotation.
+
+Configure the Render environment variable `FOOTBALL_CONTENT_FEED_URL` to a publicly reachable HTTPS JSON feed. The required JSON shape is demonstrated in `server/daily-content-feed.example.json`. The feed must contain current verified records for the category being refreshed; the server validates the shape but cannot independently fact-check the provider. The daily GitHub Actions workflow triggers both the live-player refresh and the rotating question refresh.
+
+Endpoints: `GET /api/daily-content`, `GET /api/daily-content/status`, and protected `POST /api/refresh-daily-content` (uses the existing `CRON_SECRET`). The app fetches the latest question cache when it starts.

@@ -20,6 +20,10 @@ const MIME = {
 const LIVE_CACHE_FILE = path.join(__dirname, "live-football-cache.json");
 const LIVE_REFRESH_MS = 24 * 60 * 60 * 1000;
 const API_BASE = "https://v3.football.api-sports.io";
+const PLAYER_LOOKUP_LEAGUE = process.env.FOOTBALL_LOOKUP_LEAGUE || "2";
+const PLAYER_LOOKUP_SEASON = process.env.FOOTBALL_LOOKUP_SEASON || "2022";
+const API_REQUEST_GAP_MS = 6500;
+const MAX_PLAYERS_PER_REFRESH = 5;
 const PLAYER_API_NAMES = {
   "كريستيانو رونالدو": "Cristiano Ronaldo",
   "ليونيل ميسي": "Lionel Messi",
@@ -48,11 +52,51 @@ const PLAYER_API_NAMES = {
   "فرانشيسكو توتي": "Francesco Totti",
   "تييري هنري": "Thierry Henry"
 };
-let liveCache = { source: "API-Football", updatedAt: null, players: [], lastError: null };
+let liveCache = { source: "API-Football", updatedAt: null, players: [], lastError: null, nextPlayerIndex: 0 };
 let refreshPromise = null;
+let lastApiRequestAt = 0;
 try {
   if (fs.existsSync(LIVE_CACHE_FILE)) liveCache = { ...liveCache, ...JSON.parse(fs.readFileSync(LIVE_CACHE_FILE, "utf8")) };
 } catch (e) { console.warn("Could not read live football cache:", e.message); }
+
+// Daily content rotation: exactly one category per successful daily refresh.
+const DAILY_CATEGORIES = ["p", "tp", "g", "t"];
+const DAILY_CONTENT_FILE = path.join(__dirname, "daily-content-cache.json");
+let dailyContent = { categoryIndex: 0, lastRunDate: null, updatedAt: null, categories: { p: [], tp: [], g: [], t: [] }, lastError: null };
+try {
+  if (fs.existsSync(DAILY_CONTENT_FILE)) dailyContent = { ...dailyContent, ...JSON.parse(fs.readFileSync(DAILY_CONTENT_FILE, "utf8")) };
+} catch (e) { console.warn("Could not read daily content cache:", e.message); }
+function saveDailyContent() {
+  fs.writeFileSync(DAILY_CONTENT_FILE, JSON.stringify(dailyContent, null, 2));
+}
+async function refreshDailyContent(force = false) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!force && dailyContent.lastRunDate === today) return dailyContent;
+  const feedUrl = process.env.FOOTBALL_CONTENT_FEED_URL;
+  if (!feedUrl) throw new Error("FOOTBALL_CONTENT_FEED_URL غير مضبوط؛ لم يتم تخطي الفقرة.");
+  const category = DAILY_CATEGORIES[dailyContent.categoryIndex % DAILY_CATEGORIES.length];
+  const response = await fetch(feedUrl, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error("Content feed HTTP " + response.status);
+  const payload = await response.json();
+  const rows = payload && payload[category];
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error("مصدر التحديث لا يحتوي بيانات صالحة للفقرة: " + category);
+  // Validate the minimum shape expected by the game before replacing its data.
+  const valid = rows.filter(x => {
+    if (!x || !["m", "h"].includes(x.d)) return false;
+    if (category === "p") return typeof x.n === "string" && Array.isArray(x.c) && x.c.length > 0;
+    if (category === "tp") return typeof x.n === "string" && Array.isArray(x.path) && x.path.length > 0;
+    return typeof x.q === "string" && typeof x.a === "string";
+  });
+  if (!valid.length) throw new Error("كل عناصر الفقرة غير صالحة؛ لم يتم استبدال البيانات.");
+  dailyContent.categories[category] = valid;
+  dailyContent.categoryIndex = (dailyContent.categoryIndex + 1) % DAILY_CATEGORIES.length;
+  dailyContent.lastRunDate = today;
+  dailyContent.updatedAt = new Date().toISOString();
+  dailyContent.lastCategory = category;
+  dailyContent.lastError = null;
+  saveDailyContent();
+  return dailyContent;
+}
 
 const sendJson = (res, status, data) => {
   res.writeHead(status, {
@@ -65,13 +109,21 @@ const sendJson = (res, status, data) => {
   res.end(JSON.stringify(data));
 };
 const normalizeName = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function apiFootball(pathname) {
   const key = process.env.FOOTBALL_API_KEY;
   if (!key) throw new Error("FOOTBALL_API_KEY is not configured");
+  const wait = Math.max(0, API_REQUEST_GAP_MS - (Date.now() - lastApiRequestAt));
+  if (wait) await sleep(wait);
+  lastApiRequestAt = Date.now();
   const response = await fetch(API_BASE + pathname, {
     headers: { "x-apisports-key": key },
     signal: AbortSignal.timeout(18000)
   });
+  if (response.status === 429) {
+    const retryAfter = Number(response.headers.get("retry-after") || 60);
+    throw new Error("API-Football HTTP 429: تجاوز حد الطلبات. أوقفنا الدفعة الحالية؛ أعد المحاولة بعد " + retryAfter + " ثانية.");
+  }
   if (!response.ok) throw new Error("API-Football HTTP " + response.status);
   const body = await response.json();
   if (body.errors && Object.keys(body.errors).length) throw new Error(JSON.stringify(body.errors));
@@ -81,58 +133,125 @@ async function refreshLiveFootball(force = false) {
   if (refreshPromise) return refreshPromise;
   if (!process.env.FOOTBALL_API_KEY) throw new Error("أضف FOOTBALL_API_KEY إلى متغيرات بيئة السيرفر أولاً.");
   if (!force && liveCache.updatedAt && Date.now() - Date.parse(liveCache.updatedAt) < LIVE_REFRESH_MS) return liveCache;
+
   refreshPromise = (async () => {
-    const players = [];
     const entries = Object.entries(PLAYER_API_NAMES);
-    // Two API calls per tracked player (profile lookup + transfer history).
-    // Run sequentially to respect provider quotas and avoid bursts.
-    for (const [arabicName, apiName] of entries) {
+    const existing = new Map((liveCache.players || []).map(player => [player.name, player]));
+    const startIndex = Number(liveCache.nextPlayerIndex || 0) % entries.length;
+    const batch = [];
+    for (let i = 0; i < Math.min(MAX_PLAYERS_PER_REFRESH, entries.length); i++) {
+      batch.push(entries[(startIndex + i) % entries.length]);
+    }
+
+    let processed = 0;
+    for (const [arabicName, apiName] of batch) {
       try {
-        const search = await apiFootball("/players?search=" + encodeURIComponent(apiName));
-        if (!search.length) continue;
+        // API-Football requires league + season (or team) for player-name searches.
+        const searchPath = "/players?search=" + encodeURIComponent(apiName)
+          + "&league=" + encodeURIComponent(PLAYER_LOOKUP_LEAGUE)
+          + "&season=" + encodeURIComponent(PLAYER_LOOKUP_SEASON);
+        const search = await apiFootball(searchPath);
         const wanted = normalizeName(apiName);
-        const match = search.find(x => normalizeName(x.player?.name) === wanted) || (search.length === 1 ? search[0] : null);
-        if (!match?.player?.id) continue;
-        const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
-        const rawTransfers = transferRows.flatMap(x => Array.isArray(x.transfers) ? x.transfers : []);
-        rawTransfers.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-        const path = [];
-        for (const transfer of rawTransfers) {
-          const from = transfer.teams?.out?.name;
-          const to = transfer.teams?.in?.name;
-          if (from && (!path.length || path[path.length - 1] !== from)) path.push(from);
-          if (to && path[path.length - 1] !== to) path.push(to);
+        // Never accept a non-exact result: a single search result can still
+        // belong to a different player with a similar name.
+        const match = search.find(x => normalizeName(x.player?.name) === wanted);
+        if (!match?.player?.id) {
+          console.warn("No exact player match for " + apiName + " in league " + PLAYER_LOOKUP_LEAGUE + " season " + PLAYER_LOOKUP_SEASON);
+          processed++;
+          continue;
         }
-        const latest = rawTransfers[rawTransfers.length - 1];
-        // Prefer the latest team represented in player statistics; use the latest transfer
-        // destination only as a fallback (for example, during the off-season).
-        let currentClub = null;
-        if (Array.isArray(match.statistics) && match.statistics.length) {
-          const stats = match.statistics.slice().sort((a, b) => Number(b.league?.season || 0) - Number(a.league?.season || 0));
+
+        const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
+
+        // Deduplicate identical transfer records, then build a strictly
+        // chronological and continuous club chain. Do not invent a link when
+        // the API returns conflicting or disconnected transfer rows.
+        const seenTransfers = new Set();
+        const rawTransfers = transferRows
+          .flatMap(x => Array.isArray(x.transfers) ? x.transfers : [])
+          .filter(t => t && t.date && (t.teams?.out?.name || t.teams?.in?.name))
+          .map((t, index) => ({ ...t, _index: index }))
+          .filter(t => {
+            const key = [
+              String(t.date).slice(0, 10),
+              normalizeName(t.teams?.out?.name || ""),
+              normalizeName(t.teams?.in?.name || "")
+            ].join("|");
+            if (seenTransfers.has(key)) return false;
+            seenTransfers.add(key);
+            return true;
+          })
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a._index - b._index);
+
+        const clubPath = [];
+        const acceptedTransfers = [];
+        for (const transfer of rawTransfers) {
+          const from = transfer.teams?.out?.name || null;
+          const to = transfer.teams?.in?.name || null;
+          if (!from || !to) continue;
+
+          if (clubPath.length === 0) {
+            clubPath.push(from, to);
+            acceptedTransfers.push(transfer);
+            continue;
+          }
+
+          const lastClub = clubPath[clubPath.length - 1];
+          if (normalizeName(lastClub) === normalizeName(from)) {
+            if (normalizeName(lastClub) !== normalizeName(to)) clubPath.push(to);
+            acceptedTransfers.push(transfer);
+          } else {
+            console.warn(
+              "Skipped disconnected transfer for " + apiName + ": " + from + " -> " + to
+            );
+          }
+        }
+
+        const latest = acceptedTransfers.length
+          ? acceptedTransfers[acceptedTransfers.length - 1]
+          : null;
+
+        // The latest destination in the verified chain is the preferred
+        // current club. Use statistics only if no valid transfer chain exists.
+        let currentClub = latest?.teams?.in?.name || null;
+        if (!currentClub && Array.isArray(match.statistics) && match.statistics.length) {
+          const stats = match.statistics.slice().sort(
+            (x, y) => Number(y.league?.season || 0) - Number(x.league?.season || 0)
+          );
           currentClub = stats[0]?.team?.name || null;
         }
-        if (!currentClub) currentClub = latest?.teams?.in?.name || null;
-        if (!currentClub) continue;
-        if (path.length && path[path.length - 1] !== currentClub) path.push(currentClub);
-        players.push({
-          name: arabicName,
-          apiName,
-          currentClub,
-          path: path.length > 1 ? path : [],
-          latestTransfer: latest ? {
-            date: latest.date || null,
-            from: latest.teams?.out?.name || null,
-            to: latest.teams?.in?.name || null
-          } : null,
-          updatedAt: new Date().toISOString()
-        });
+        if (currentClub) {
+          if (!clubPath.length) clubPath.push(currentClub);
+          existing.set(arabicName, {
+            name: arabicName, apiName, currentClub,
+            path: clubPath.length > 1 ? clubPath : [],
+            latestTransfer: latest ? {
+              date: latest.date || null,
+              from: latest.teams?.out?.name || null,
+              to: latest.teams?.in?.name || null
+            } : null,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        processed++;
       } catch (error) {
         console.warn("Live football refresh failed for " + apiName + ": " + error.message);
+        if (error.message.includes("HTTP 429")) break;
+        processed++;
       }
     }
+
+    const players = Array.from(existing.values());
     if (!players.length) throw new Error("لم يرجع مصدر البيانات أي معلومات صالحة؛ تم الاحتفاظ بآخر نسخة محفوظة.");
-    liveCache = { source: "API-Football", updatedAt: new Date().toISOString(), players, lastError: null };
+    liveCache = {
+      source: "API-Football",
+      updatedAt: new Date().toISOString(),
+      players,
+      lastError: null,
+      nextPlayerIndex: (startIndex + Math.max(processed, 1)) % entries.length
+    };
     fs.writeFileSync(LIVE_CACHE_FILE, JSON.stringify(liveCache, null, 2));
+    console.log("Live football batch completed: " + processed + " checked; " + players.length + " cached.");
     return liveCache;
   })().catch(error => {
     liveCache.lastError = error.message;
@@ -155,6 +274,22 @@ const srv = http.createServer(async (req, res) => {
       ? { configured: !!process.env.FOOTBALL_API_KEY, source: liveCache.source, updatedAt: liveCache.updatedAt, playersUpdated: liveCache.players.length, lastError: liveCache.lastError }
       : liveCache;
     return sendJson(res, 200, payload);
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/daily-content")) {
+    const statusOnly = req.url.startsWith("/api/daily-content/status");
+    return sendJson(res, 200, statusOnly ? {
+      updatedAt: dailyContent.updatedAt, lastRunDate: dailyContent.lastRunDate,
+      lastCategory: dailyContent.lastCategory || null,
+      nextCategory: DAILY_CATEGORIES[dailyContent.categoryIndex % DAILY_CATEGORIES.length],
+      lastError: dailyContent.lastError
+    } : dailyContent);
+  }
+  if (req.method === "POST" && req.url === "/api/refresh-daily-content") {
+    const expected = process.env.CRON_SECRET;
+    if (!expected || req.headers["x-refresh-secret"] !== expected) return sendJson(res, 401, { error: "Unauthorized" });
+    refreshDailyContent(true).then(data => console.log("Daily content refreshed:", data.lastCategory))
+      .catch(error => { dailyContent.lastError = error.message; try { saveDailyContent(); } catch (_) {} console.warn("Daily content refresh:", error.message); });
+    return sendJson(res, 202, { ok: true, started: true, nextCategory: DAILY_CATEGORIES[dailyContent.categoryIndex % DAILY_CATEGORIES.length] });
   }
   if (req.method === "POST" && req.url === "/api/refresh-live-football") {
     const expected = process.env.CRON_SECRET;
@@ -197,6 +332,8 @@ const srv = http.createServer(async (req, res) => {
 // also calls the protected endpoint once per day, so sleeping hosts can still refresh.
 setTimeout(() => refreshLiveFootball(false).catch(e => console.warn("Initial live refresh:", e.message)), 2500);
 setInterval(() => refreshLiveFootball(false).catch(e => console.warn("Scheduled live refresh:", e.message)), LIVE_REFRESH_MS);
+setTimeout(() => refreshDailyContent(false).catch(e => { dailyContent.lastError = e.message; console.warn("Initial daily content refresh:", e.message); }), 5000);
+setInterval(() => refreshDailyContent(false).catch(e => { dailyContent.lastError = e.message; console.warn("Scheduled daily content refresh:", e.message); }), LIVE_REFRESH_MS);
 
 const wss = new WebSocketServer({ server: srv, maxPayload: 20000 });
 const rooms = new Map();

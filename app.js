@@ -93,6 +93,26 @@ const DEFAULT_SERVER = (location.hostname && location.hostname !== "localhost" &
   ? ((location.protocol === "https:" ? "wss://" : "ws://") + location.host)
   : "wss://football-0kb6.onrender.com";
 let SRV=DEFAULT_SERVER;
+// Pull the most recently refreshed category from the server so all devices use the same bank.
+async function syncDailyQuestionContent(){
+ try{
+  const base=DEFAULT_SERVER.replace(/^wss:/,"https:").replace(/^ws:/,"http:");
+  const response=await fetch(base+"/api/daily-content",{cache:"no-store"});
+  if(!response.ok)return;
+  const payload=await response.json();
+  if(!payload||!payload.categories)return;
+  let changed=false;
+  for(const key of ["p","tp","g","t"]){
+   const rows=payload.categories[key];
+   if(Array.isArray(rows)&&rows.length){
+    const sig=a=>JSON.stringify(a);
+    if(sig(D[key]||[])!==sig(rows)){D[key]=rows;changed=true;}
+   }
+  }
+  if(changed)save();
+ }catch(e){console.warn("تعذر مزامنة بنك الأسئلة اليومي:",e.message)}
+}
+
 try{MYN=localStorage.getItem("fbme")||""}catch(e){}
 const send=o=>{if(NET&&NET.ws.readyState===1)NET.ws.send(JSON.stringify(o))};
 const cur=()=>G.rounds[G.r][G.i];
