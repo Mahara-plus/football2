@@ -107,8 +107,15 @@ async function syncDailyQuestionContent(){
   for(const key of ["p","tp","g","t"]){
    const rows=payload.categories[key];
    if(Array.isArray(rows)&&rows.length){
-    const sig=a=>JSON.stringify(a);
-    if(sig(D[key]||[])!==sig(rows)){D[key]=rows;changed=true;}
+    // Merge server updates with the built-in bank; never erase local questions.
+    const current=Array.isArray(D[key])?D[key]:[];
+    const idOf=x=>String(x.id||x.q||x.n||"").trim();
+    const merged=[...current];
+    for(const row of rows){
+     const id=idOf(row); const at=merged.findIndex(x=>idOf(x)===id);
+     if(at<0)merged.push(row); else merged[at]={...merged[at],...row};
+    }
+    if(JSON.stringify(current)!==JSON.stringify(merged)){D[key]=merged;changed=true;}
    }
   }
   if(changed)save();
@@ -195,8 +202,9 @@ function bankStatsHTML(){
  return Object.keys(labels).map(k=>{
   const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
   const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
-  const ok=m>=250&&h>=250;
-  return `<div class="row"><span>${labels[k]}</span><b>${total}/500</b></div><small>${m}/250 متوسط · ${h}/250 صعب جداً ${ok?'✓':'— يحتاج أسئلة إضافية'}</small>`;
+  const target=k==="g"?1000:250;
+  const ok=m>=target&&h>=target;
+  return `<div class="row"><span>${labels[k]}</span><b>${total}/${target*2}</b></div><small>${m}/${target} متوسط · ${h}/${target} صعب جداً ${ok?'✓':'— يحتاج أسئلة إضافية'}</small>`;
  }).join("");
 }
 function addName(){const v=document.getElementById("nm").value.trim();if(v&&D.names.length<12){D.names.push(v);save()}setup()}
