@@ -83,9 +83,9 @@ const sh=a=>a.map(x=>[Math.random(),x]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
 const LBL={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"من بنك 2000 سؤال",t:"سؤال انتقالات"};
 const QUESTION_BANK=Array.isArray(window.QUESTION_BANK)?window.QUESTION_BANK:[];
 const QUESTION_HISTORY_KEY="fbq_seen_v1";
-const questionKey=d=>String(d.id||d.q||d.n||"");
+const questionKey=(k,d)=>`${k}:${String(d.id||d.q||d.n||"")}`;
 function getSeen(){try{return new Set(JSON.parse(localStorage.getItem(QUESTION_HISTORY_KEY)||"[]"))}catch(e){return new Set()}}
-function setSeen(s){try{localStorage.setItem(QUESTION_HISTORY_KEY,JSON.stringify([...s].slice(-2500)))}catch(e){}}
+function setSeen(s){try{localStorage.setItem(QUESTION_HISTORY_KEY,JSON.stringify([...s].slice(-10000)))}catch(e){}}
 let G=null,GV=null,NET=null,tab="g",BZ="",MYN="",PLAYMODE="ffa",TEAMDATA=[{name:"الفريق الأول",members:["",""]},{name:"الفريق الثاني",members:["",""]}];
 // Use the same Render host automatically in the browser; use the deployed
 // Render URL when running inside the Android Capacitor app.
@@ -163,8 +163,19 @@ function setup(){
  ${modeUI}${participants}
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
- <small>بنك الأسئلة: ${QUESTION_BANK.length.toLocaleString("ar-EG")} سؤالاً (1000 متوسط + 1000 صعب جداً). لا يتكرر السؤال داخل المباراة، ويُتجنب تكراره في المباريات التالية حتى استهلاك البنك. تظهر أربعة خيارات لكل سؤال.</small></div>
+ <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div></div>
+ <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، كما يُحفظ سجل الأسئلة المستخدمة للمباريات التالية على هذا الجهاز.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
+}
+function bankStatsHTML(){
+ const labels={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"أسئلة عامة",t:"أسئلة انتقالات"};
+ const src={p:D.p||[],tp:D.tp||[],g:(D.g||[]).concat(QUESTION_BANK),t:D.t||[]};
+ return Object.keys(labels).map(k=>{
+  const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
+  const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
+  const ok=m>=250&&h>=250;
+  return `<div class="row"><span>${labels[k]}</span><b>${total}/500</b></div><small>${m}/250 متوسط · ${h}/250 صعب جداً ${ok?'✓':'— يحتاج أسئلة إضافية'}</small>`;
+ }).join("");
 }
 function addName(){const v=document.getElementById("nm").value.trim();if(v&&D.names.length<12){D.names.push(v);save()}setup()}
 function delName(i){D.names.splice(i,1);save();setup()}
@@ -189,15 +200,29 @@ function start(){
  if(!C.length){alert('أضف لاعباً واحداً على الأقل');return}
  const c=D.cfg,st={},rounds=[],seen=getSeen(),usedNow=[];
  const source=k=>k==="g"?D.g.concat(QUESTION_BANK):D[k];
- for(const k of ["p","tp","g","t"]){
+ const kinds=["p","tp","g","t"],MAX_MATCH_QUESTIONS=100;
+ const queues={};
+ let requested=0;
+ for(const k of kinds){
   const all=source(k).filter(x=>(x.d==="m"||x.d==="h")&&(c.diff==="x"||x.d===c.diff));
-  const needed=c.rounds*c[k];
-  let fresh=all.filter(x=>!seen.has(questionKey(x)));
-  // Once every eligible question in a section has been used, start a new cycle.
-  if(fresh.length<needed){fresh=all;for(const x of all)seen.delete(questionKey(x));}
-  if(fresh.length<needed){alert(`عدد أسئلة قسم ${LBL[k]} غير كافٍ للمباراة. المتاح ${fresh.length} والمطلوب ${needed}.`);return;}
-  st[k]=sh(fresh);
+  const unique=[],local=new Set();
+  for(const x of all){const key=questionKey(k,x);if(!local.has(key)&&!seen.has(key)){local.add(key);unique.push(x);}}
+  queues[k]=sh(unique);
+  requested+=Math.max(0,c.rounds*c[k]);
  }
+ // A match can use up to 100 distinct questions. Never recycle an already-used
+ // question to satisfy a category quota; use the remaining fresh questions instead.
+ const target=Math.min(MAX_MATCH_QUESTIONS,requested);
+ const selected=[];
+ for(const k of kinds){
+  const need=Math.max(0,c.rounds*c[k]);
+  for(let i=0;i<need&&selected.length<target&&queues[k].length;i++)selected.push({t:k,d:queues[k].pop()});
+ }
+ if(selected.length<target){
+  const fallback=sh(kinds.flatMap(k=>queues[k].map(d=>({t:k,d}))));
+  for(const item of fallback){if(selected.length>=target)break;selected.push(item);}
+ }
+ if(!selected.length){alert('لا توجد أسئلة جديدة متاحة. أضف أسئلة جديدة إلى البنك لمتابعة اللعب دون تكرار.');return;}
  const answerOf=(k,d)=>k==="p"||k==="tp"?d.n:d.a;
  const playerRole=(player)=>{
   const text=[player.pos||"",...(player.c||[]),player.n||""].join(" ");
@@ -234,9 +259,15 @@ function start(){
   const distractors=sh(pool).slice(0,3);
   return sh([correct,...distractors]);
  };
- for(let r=0;r<c.rounds;r++){const it=[];for(const k of ["p","tp","g","t"])for(let i=0;i<c[k];i++){const d=st[k].pop();usedNow.push(questionKey(d));it.push({t:k,d,opts:optionsFor(k,d),cl:1,rev:false,selected:null});}rounds.push(sh(it));}
+ for(let idx=0;idx<selected.length;idx++){
+  const item=selected[idx],d=item.d,k=item.t;usedNow.push(questionKey(k,d));
+  const roundIndex=idx%Math.max(1,c.rounds);
+  if(!rounds[roundIndex])rounds[roundIndex]=[];
+  rounds[roundIndex].push({t:k,d,opts:optionsFor(k,d),cl:1,rev:false,selected:null});
+ }
+ for(let r=0;r<rounds.length;r++)rounds[r]=sh(rounds[r]);
  usedNow.forEach(k=>seen.add(k));setSeen(seen);
- if(!rounds.flat().length){alert('لا توجد أسئلة. زد القيم.');return}
+ if(!rounds.flat().length){alert('لا توجد أسئلة جديدة متاحة.');return}
  G={rounds,r:0,i:0,C,sc:C.map(()=>0),buzz:[],gid:Math.random().toString(36).slice(2,6),mode:NET?'online':PLAYMODE};paint();
 }
 function view(){

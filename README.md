@@ -57,3 +57,8 @@ The launcher icon is generated from `assets/icon-only.png`, `assets/icon-foregro
 
 ### تحديث أسئلة مسيرة الانتقالات
 في أسئلة «لاعب من انتقالاته» يظهر الآن مسار الأندية الكامل الموجود في بيانات اللاعب دفعة واحدة، من أول نادٍ مسجل في المسار إلى آخر نادٍ، بدلاً من إظهار أول نادٍ فقط ثم كشف بقية المسار كتلميحات. تم إيقاف زر التلميح الإضافي لهذا النوع من الأسئلة.
+
+## Question-bank capacity and duplicate prevention
+The settings screen now reports the available unique questions per section against the requested target of 500 (250 medium and 250 very hard). The project does not claim a section is complete unless its counts reach both difficulty targets. Question IDs are tracked locally to prevent repeats within a match and across subsequent matches on the same device; the history window is retained up to 10,000 IDs. Each match remains capped at 100 questions.
+
+Note: the supplied source data currently does not contain 500 unique questions in each section. The UI reports the actual counts and the remaining gap rather than fabricating duplicate questions.
