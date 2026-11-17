@@ -113,8 +113,9 @@ async function refreshLiveFootball(force = false) {
           + "&season=" + encodeURIComponent(PLAYER_LOOKUP_SEASON);
         const search = await apiFootball(searchPath);
         const wanted = normalizeName(apiName);
-        const match = search.find(x => normalizeName(x.player?.name) === wanted)
-          || (search.length === 1 ? search[0] : null);
+        // Never accept a non-exact result: a single search result can still
+        // belong to a different player with a similar name.
+        const match = search.find(x => normalizeName(x.player?.name) === wanted);
         if (!match?.player?.id) {
           console.warn("No exact player match for " + apiName + " in league " + PLAYER_LOOKUP_LEAGUE + " season " + PLAYER_LOOKUP_SEASON);
           processed++;
@@ -123,33 +124,56 @@ async function refreshLiveFootball(force = false) {
 
         const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
 
-        // Remove only identical API transfer rows; legitimate returns to a former
-        // club remain in the history when they have a different date/transfer.
+        // Deduplicate identical transfer records, then build a strictly
+        // chronological and continuous club chain. Do not invent a link when
+        // the API returns conflicting or disconnected transfer rows.
         const seenTransfers = new Set();
         const rawTransfers = transferRows
           .flatMap(x => Array.isArray(x.transfers) ? x.transfers : [])
           .filter(t => t && t.date && (t.teams?.out?.name || t.teams?.in?.name))
+          .map((t, index) => ({ ...t, _index: index }))
           .filter(t => {
-            const key = [String(t.date).slice(0, 10), t.teams?.out?.name || "", t.teams?.in?.name || ""].join("|");
+            const key = [
+              String(t.date).slice(0, 10),
+              normalizeName(t.teams?.out?.name || ""),
+              normalizeName(t.teams?.in?.name || "")
+            ].join("|");
             if (seenTransfers.has(key)) return false;
             seenTransfers.add(key);
             return true;
           })
-          .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a._index - b._index);
 
         const clubPath = [];
+        const acceptedTransfers = [];
         for (const transfer of rawTransfers) {
           const from = transfer.teams?.out?.name || null;
           const to = transfer.teams?.in?.name || null;
-          if (from && clubPath[clubPath.length - 1] !== from) clubPath.push(from);
-          if (to && clubPath[clubPath.length - 1] !== to) clubPath.push(to);
+          if (!from || !to) continue;
+
+          if (clubPath.length === 0) {
+            clubPath.push(from, to);
+            acceptedTransfers.push(transfer);
+            continue;
+          }
+
+          const lastClub = clubPath[clubPath.length - 1];
+          if (normalizeName(lastClub) === normalizeName(from)) {
+            if (normalizeName(lastClub) !== normalizeName(to)) clubPath.push(to);
+            acceptedTransfers.push(transfer);
+          } else {
+            console.warn(
+              "Skipped disconnected transfer for " + apiName + ": " + from + " -> " + to
+            );
+          }
         }
 
-        const latest = rawTransfers.length ? rawTransfers[rawTransfers.length - 1] : null;
+        const latest = acceptedTransfers.length
+          ? acceptedTransfers[acceptedTransfers.length - 1]
+          : null;
 
-        // Prefer the destination of the most recent transfer. Player statistics
-        // can contain older clubs (for example PSG for Neymar), so they must
-        // only be used as a fallback when transfer history has no destination.
+        // The latest destination in the verified chain is the preferred
+        // current club. Use statistics only if no valid transfer chain exists.
         let currentClub = latest?.teams?.in?.name || null;
         if (!currentClub && Array.isArray(match.statistics) && match.statistics.length) {
           const stats = match.statistics.slice().sort(
@@ -158,7 +182,7 @@ async function refreshLiveFootball(force = false) {
           currentClub = stats[0]?.team?.name || null;
         }
         if (currentClub) {
-          if (clubPath[clubPath.length - 1] !== currentClub) clubPath.push(currentClub);
+          if (!clubPath.length) clubPath.push(currentClub);
           existing.set(arabicName, {
             name: arabicName, apiName, currentClub,
             path: clubPath.length > 1 ? clubPath : [],
