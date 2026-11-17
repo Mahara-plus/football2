@@ -121,19 +121,31 @@ async function refreshLiveFootball(force = false) {
           continue;
         }
 
-        const transferRows = await apiFootball(   "/transfers?player=" + encodeURIComponent(match.player.id) );  // إزالة سجلات الانتقال المتطابقة const seenTransfers = new Set();  const rawTransfers = transferRows   .flatMap(x => Array.isArray(x.transfers) ? x.transfers : [])   .filter(t =>     t &&     t.date &&     (t.teams?.out?.name || t.teams?.in?.name)   )   .filter(t => {     const key = [       String(t.date).slice(0, 10),       t.teams?.out?.name || "",       t.teams?.in?.name || ""     ].join("|");      if (seenTransfers.has(key)) return false;      seenTransfers.add(key);     return true;   })   .sort((a, b) =>     String(a.date).localeCompare(String(b.date))   );  // بناء مسار الأندية زمنياً const clubPath = [];  for (const transfer of rawTransfers) {   const from = transfer.teams?.out?.name || null;   const to = transfer.teams?.in?.name || null;    if (from && clubPath[clubPath.length - 1] !== from) {     clubPath.push(from);   }    if (to && clubPath[clubPath.length - 1] !== to) {     clubPath.push(to);   } }  const latest = rawTransfers.length   ? rawTransfers[rawTransfers.length - 1]   : null; + encodeURIComponent(match.player.id));
-        const rawTransfers = transferRows.flatMap(x => Array.isArray(x.transfers) ? x.transfers : []);
-        rawTransfers.sort((x, y) => String(x.date || "").localeCompare(String(y.date || "")));
+        const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
+
+        // Remove only identical API transfer rows; legitimate returns to a former
+        // club remain in the history when they have a different date/transfer.
+        const seenTransfers = new Set();
+        const rawTransfers = transferRows
+          .flatMap(x => Array.isArray(x.transfers) ? x.transfers : [])
+          .filter(t => t && t.date && (t.teams?.out?.name || t.teams?.in?.name))
+          .filter(t => {
+            const key = [String(t.date).slice(0, 10), t.teams?.out?.name || "", t.teams?.in?.name || ""].join("|");
+            if (seenTransfers.has(key)) return false;
+            seenTransfers.add(key);
+            return true;
+          })
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
         const clubPath = [];
         for (const transfer of rawTransfers) {
-          const from = transfer.teams?.out?.name;
-          const to = transfer.teams?.in?.name;
-          if (from && (!clubPath.length || clubPath[clubPath.length - 1] !== from)) clubPath.push(from);
+          const from = transfer.teams?.out?.name || null;
+          const to = transfer.teams?.in?.name || null;
+          if (from && clubPath[clubPath.length - 1] !== from) clubPath.push(from);
           if (to && clubPath[clubPath.length - 1] !== to) clubPath.push(to);
         }
 
-        const latest = rawTransfers[rawTransfers.length - 1];
+        const latest = rawTransfers.length ? rawTransfers[rawTransfers.length - 1] : null;
 
         // Prefer the destination of the most recent transfer. Player statistics
         // can contain older clubs (for example PSG for Neymar), so they must
@@ -146,7 +158,7 @@ async function refreshLiveFootball(force = false) {
           currentClub = stats[0]?.team?.name || null;
         }
         if (currentClub) {
-          if (clubPath.length && clubPath[clubPath.length - 1] !== currentClub) clubPath.push(currentClub);
+          if (clubPath[clubPath.length - 1] !== currentClub) clubPath.push(currentClub);
           existing.set(arabicName, {
             name: arabicName, apiName, currentClub,
             path: clubPath.length > 1 ? clubPath : [],
