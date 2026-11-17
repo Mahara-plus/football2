@@ -20,6 +20,10 @@ const MIME = {
 const LIVE_CACHE_FILE = path.join(__dirname, "live-football-cache.json");
 const LIVE_REFRESH_MS = 24 * 60 * 60 * 1000;
 const API_BASE = "https://v3.football.api-sports.io";
+const PLAYER_LOOKUP_LEAGUE = process.env.FOOTBALL_LOOKUP_LEAGUE || "2";
+const PLAYER_LOOKUP_SEASON = process.env.FOOTBALL_LOOKUP_SEASON || "2022";
+const API_REQUEST_GAP_MS = 6500;
+const MAX_PLAYERS_PER_REFRESH = 5;
 const PLAYER_API_NAMES = {
   "كريستيانو رونالدو": "Cristiano Ronaldo",
   "ليونيل ميسي": "Lionel Messi",
@@ -48,8 +52,9 @@ const PLAYER_API_NAMES = {
   "فرانشيسكو توتي": "Francesco Totti",
   "تييري هنري": "Thierry Henry"
 };
-let liveCache = { source: "API-Football", updatedAt: null, players: [], lastError: null };
+let liveCache = { source: "API-Football", updatedAt: null, players: [], lastError: null, nextPlayerIndex: 0 };
 let refreshPromise = null;
+let lastApiRequestAt = 0;
 try {
   if (fs.existsSync(LIVE_CACHE_FILE)) liveCache = { ...liveCache, ...JSON.parse(fs.readFileSync(LIVE_CACHE_FILE, "utf8")) };
 } catch (e) { console.warn("Could not read live football cache:", e.message); }
@@ -65,13 +70,21 @@ const sendJson = (res, status, data) => {
   res.end(JSON.stringify(data));
 };
 const normalizeName = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function apiFootball(pathname) {
   const key = process.env.FOOTBALL_API_KEY;
   if (!key) throw new Error("FOOTBALL_API_KEY is not configured");
+  const wait = Math.max(0, API_REQUEST_GAP_MS - (Date.now() - lastApiRequestAt));
+  if (wait) await sleep(wait);
+  lastApiRequestAt = Date.now();
   const response = await fetch(API_BASE + pathname, {
     headers: { "x-apisports-key": key },
     signal: AbortSignal.timeout(18000)
   });
+  if (response.status === 429) {
+    const retryAfter = Number(response.headers.get("retry-after") || 60);
+    throw new Error("API-Football HTTP 429: تجاوز حد الطلبات. أوقفنا الدفعة الحالية؛ أعد المحاولة بعد " + retryAfter + " ثانية.");
+  }
   if (!response.ok) throw new Error("API-Football HTTP " + response.status);
   const body = await response.json();
   if (body.errors && Object.keys(body.errors).length) throw new Error(JSON.stringify(body.errors));
@@ -81,58 +94,84 @@ async function refreshLiveFootball(force = false) {
   if (refreshPromise) return refreshPromise;
   if (!process.env.FOOTBALL_API_KEY) throw new Error("أضف FOOTBALL_API_KEY إلى متغيرات بيئة السيرفر أولاً.");
   if (!force && liveCache.updatedAt && Date.now() - Date.parse(liveCache.updatedAt) < LIVE_REFRESH_MS) return liveCache;
+
   refreshPromise = (async () => {
-    const players = [];
     const entries = Object.entries(PLAYER_API_NAMES);
-    // Two API calls per tracked player (profile lookup + transfer history).
-    // Run sequentially to respect provider quotas and avoid bursts.
-    for (const [arabicName, apiName] of entries) {
+    const existing = new Map((liveCache.players || []).map(player => [player.name, player]));
+    const startIndex = Number(liveCache.nextPlayerIndex || 0) % entries.length;
+    const batch = [];
+    for (let i = 0; i < Math.min(MAX_PLAYERS_PER_REFRESH, entries.length); i++) {
+      batch.push(entries[(startIndex + i) % entries.length]);
+    }
+
+    let processed = 0;
+    for (const [arabicName, apiName] of batch) {
       try {
-        const search = await apiFootball("/players?search=" + encodeURIComponent(apiName));
-        if (!search.length) continue;
+        // API-Football requires league + season (or team) for player-name searches.
+        const searchPath = "/players?search=" + encodeURIComponent(apiName)
+          + "&league=" + encodeURIComponent(PLAYER_LOOKUP_LEAGUE)
+          + "&season=" + encodeURIComponent(PLAYER_LOOKUP_SEASON);
+        const search = await apiFootball(searchPath);
         const wanted = normalizeName(apiName);
-        const match = search.find(x => normalizeName(x.player?.name) === wanted) || (search.length === 1 ? search[0] : null);
-        if (!match?.player?.id) continue;
+        const match = search.find(x => normalizeName(x.player?.name) === wanted)
+          || (search.length === 1 ? search[0] : null);
+        if (!match?.player?.id) {
+          console.warn("No exact player match for " + apiName + " in league " + PLAYER_LOOKUP_LEAGUE + " season " + PLAYER_LOOKUP_SEASON);
+          processed++;
+          continue;
+        }
+
         const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
         const rawTransfers = transferRows.flatMap(x => Array.isArray(x.transfers) ? x.transfers : []);
-        rawTransfers.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-        const path = [];
+        rawTransfers.sort((x, y) => String(x.date || "").localeCompare(String(y.date || "")));
+
+        const clubPath = [];
         for (const transfer of rawTransfers) {
           const from = transfer.teams?.out?.name;
           const to = transfer.teams?.in?.name;
-          if (from && (!path.length || path[path.length - 1] !== from)) path.push(from);
-          if (to && path[path.length - 1] !== to) path.push(to);
+          if (from && (!clubPath.length || clubPath[clubPath.length - 1] !== from)) clubPath.push(from);
+          if (to && clubPath[clubPath.length - 1] !== to) clubPath.push(to);
         }
+
         const latest = rawTransfers[rawTransfers.length - 1];
-        // Prefer the latest team represented in player statistics; use the latest transfer
-        // destination only as a fallback (for example, during the off-season).
         let currentClub = null;
         if (Array.isArray(match.statistics) && match.statistics.length) {
-          const stats = match.statistics.slice().sort((a, b) => Number(b.league?.season || 0) - Number(a.league?.season || 0));
+          const stats = match.statistics.slice().sort((x, y) => Number(y.league?.season || 0) - Number(x.league?.season || 0));
           currentClub = stats[0]?.team?.name || null;
         }
         if (!currentClub) currentClub = latest?.teams?.in?.name || null;
-        if (!currentClub) continue;
-        if (path.length && path[path.length - 1] !== currentClub) path.push(currentClub);
-        players.push({
-          name: arabicName,
-          apiName,
-          currentClub,
-          path: path.length > 1 ? path : [],
-          latestTransfer: latest ? {
-            date: latest.date || null,
-            from: latest.teams?.out?.name || null,
-            to: latest.teams?.in?.name || null
-          } : null,
-          updatedAt: new Date().toISOString()
-        });
+        if (currentClub) {
+          if (clubPath.length && clubPath[clubPath.length - 1] !== currentClub) clubPath.push(currentClub);
+          existing.set(arabicName, {
+            name: arabicName, apiName, currentClub,
+            path: clubPath.length > 1 ? clubPath : [],
+            latestTransfer: latest ? {
+              date: latest.date || null,
+              from: latest.teams?.out?.name || null,
+              to: latest.teams?.in?.name || null
+            } : null,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        processed++;
       } catch (error) {
         console.warn("Live football refresh failed for " + apiName + ": " + error.message);
+        if (error.message.includes("HTTP 429")) break;
+        processed++;
       }
     }
+
+    const players = Array.from(existing.values());
     if (!players.length) throw new Error("لم يرجع مصدر البيانات أي معلومات صالحة؛ تم الاحتفاظ بآخر نسخة محفوظة.");
-    liveCache = { source: "API-Football", updatedAt: new Date().toISOString(), players, lastError: null };
+    liveCache = {
+      source: "API-Football",
+      updatedAt: new Date().toISOString(),
+      players,
+      lastError: null,
+      nextPlayerIndex: (startIndex + Math.max(processed, 1)) % entries.length
+    };
     fs.writeFileSync(LIVE_CACHE_FILE, JSON.stringify(liveCache, null, 2));
+    console.log("Live football batch completed: " + processed + " checked; " + players.length + " cached.");
     return liveCache;
   })().catch(error => {
     liveCache.lastError = error.message;
