@@ -121,7 +121,7 @@ async function refreshLiveFootball(force = false) {
           continue;
         }
 
-        const transferRows = await apiFootball("/transfers?player=" + encodeURIComponent(match.player.id));
+        const transferRows = await apiFootball(   "/transfers?player=" + encodeURIComponent(match.player.id) );  // إزالة سجلات الانتقال المتطابقة const seenTransfers = new Set();  const rawTransfers = transferRows   .flatMap(x => Array.isArray(x.transfers) ? x.transfers : [])   .filter(t =>     t &&     t.date &&     (t.teams?.out?.name || t.teams?.in?.name)   )   .filter(t => {     const key = [       String(t.date).slice(0, 10),       t.teams?.out?.name || "",       t.teams?.in?.name || ""     ].join("|");      if (seenTransfers.has(key)) return false;      seenTransfers.add(key);     return true;   })   .sort((a, b) =>     String(a.date).localeCompare(String(b.date))   );  // بناء مسار الأندية زمنياً const clubPath = [];  for (const transfer of rawTransfers) {   const from = transfer.teams?.out?.name || null;   const to = transfer.teams?.in?.name || null;    if (from && clubPath[clubPath.length - 1] !== from) {     clubPath.push(from);   }    if (to && clubPath[clubPath.length - 1] !== to) {     clubPath.push(to);   } }  const latest = rawTransfers.length   ? rawTransfers[rawTransfers.length - 1]   : null; + encodeURIComponent(match.player.id));
         const rawTransfers = transferRows.flatMap(x => Array.isArray(x.transfers) ? x.transfers : []);
         rawTransfers.sort((x, y) => String(x.date || "").localeCompare(String(y.date || "")));
 
