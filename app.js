@@ -164,7 +164,7 @@ function setup(){
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
  <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div></div>
- <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، كما يُحفظ سجل الأسئلة المستخدمة للمباريات التالية على هذا الجهاز.</small></div>
+ <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، وتصبح الأسئلة متاحة مجدداً في مباراة جديدة بعد انتهاء المباراة الحالية.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
 }
 function bankStatsHTML(){
@@ -198,7 +198,7 @@ function start(){
   if(!a||!b){alert('أدخل اسم المتنافسين');return}C=[{n:a,id:null},{n:b,id:null}];D.names=[a,b];save();
  }
  if(!C.length){alert('أضف لاعباً واحداً على الأقل');return}
- const c=D.cfg,st={},rounds=[],seen=getSeen(),usedNow=[];
+ const c=D.cfg,st={},rounds=[],seen=new Set(),usedNow=[];
  const source=k=>k==="g"?D.g.concat(QUESTION_BANK):D[k];
  const kinds=["p","tp","g","t"],MAX_MATCH_QUESTIONS=100;
  const queues={};
@@ -266,7 +266,8 @@ function start(){
   rounds[roundIndex].push({t:k,d,opts:optionsFor(k,d),cl:1,rev:false,selected:null});
  }
  for(let r=0;r<rounds.length;r++)rounds[r]=sh(rounds[r]);
- usedNow.forEach(k=>seen.add(k));setSeen(seen);
+ // History is scoped to this match: questions never repeat between rounds in this match,
+ // but become available again in a later match so the game cannot run out permanently.
  if(!rounds.flat().length){alert('لا توجد أسئلة جديدة متاحة.');return}
  G={rounds,r:0,i:0,C,sc:C.map(()=>0),buzz:[],gid:Math.random().toString(36).slice(2,6),mode:NET?'online':PLAYMODE};paint();
 }

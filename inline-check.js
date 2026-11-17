@@ -187,7 +187,7 @@ function start(){
   if(!a||!b){alert('أدخل اسم المتنافسين');return}C=[{n:a,id:null},{n:b,id:null}];D.names=[a,b];save();
  }
  if(!C.length){alert('أضف لاعباً واحداً على الأقل');return}
- const c=D.cfg,st={},rounds=[],seen=getSeen(),usedNow=[];
+ const c=D.cfg,st={},rounds=[],seen=new Set(),usedNow=[];
  const source=k=>k==="g"?D.g.concat(QUESTION_BANK):D[k];
  const kinds=["p","tp","g","t"],MAX_MATCH_QUESTIONS=100;
  const queues={};
@@ -255,7 +255,8 @@ function start(){
   rounds[roundIndex].push({t:k,d,opts:optionsFor(k,d),cl:1,rev:false,selected:null});
  }
  for(let r=0;r<rounds.length;r++)rounds[r]=sh(rounds[r]);
- usedNow.forEach(k=>seen.add(k));setSeen(seen);
+ // History is scoped to this match: questions never repeat between rounds in this match,
+ // but become available again in a later match so the game cannot run out permanently.
  if(!rounds.flat().length){alert('لا توجد أسئلة جديدة متاحة.');return}
  G={rounds,r:0,i:0,C,sc:C.map(()=>0),buzz:[],gid:Math.random().toString(36).slice(2,6),mode:NET?'online':PLAYMODE};paint();
 }
