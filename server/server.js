@@ -134,12 +134,17 @@ async function refreshLiveFootball(force = false) {
         }
 
         const latest = rawTransfers[rawTransfers.length - 1];
-        let currentClub = null;
-        if (Array.isArray(match.statistics) && match.statistics.length) {
-          const stats = match.statistics.slice().sort((x, y) => Number(y.league?.season || 0) - Number(x.league?.season || 0));
+
+        // Prefer the destination of the most recent transfer. Player statistics
+        // can contain older clubs (for example PSG for Neymar), so they must
+        // only be used as a fallback when transfer history has no destination.
+        let currentClub = latest?.teams?.in?.name || null;
+        if (!currentClub && Array.isArray(match.statistics) && match.statistics.length) {
+          const stats = match.statistics.slice().sort(
+            (x, y) => Number(y.league?.season || 0) - Number(x.league?.season || 0)
+          );
           currentClub = stats[0]?.team?.name || null;
         }
-        if (!currentClub) currentClub = latest?.teams?.in?.name || null;
         if (currentClub) {
           if (clubPath.length && clubPath[clubPath.length - 1] !== currentClub) clubPath.push(currentClub);
           existing.set(arabicName, {
