@@ -42,7 +42,7 @@ input[type=number]{width:80px;text-align:center}
 <script src="question-bank.js"></script>
 <script>
 const DEF={
- cfg:{rounds:3,p:1,tp:1,g:1,t:1,diff:"x"},
+ cfg:{rounds:3,p:0,tp:0,g:1,t:1,diff:"x"},
  names:[],
  p:[
   {d:"m",n:"ليونيل ميسي",c:["أرجنتيني، يلعب رقم 10","لعب لبرشلونة وباريس سان جيرمان","قاد بلاده للفوز بكأس العالم 2022"]},
@@ -122,7 +122,7 @@ const save=()=>{try{localStorage.setItem(K,JSON.stringify(D))}catch(e){}};
 const $=document.getElementById("app");
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sh=a=>a.map(x=>[Math.random(),x]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
-const LBL={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"من بنك 2000 سؤال",t:"سؤال انتقالات"};
+const LBL={g:"أسئلة عامة",t:"أسئلة انتقالات"};
 const QUESTION_BANK=Array.isArray(window.QUESTION_BANK)?window.QUESTION_BANK:[];
 const LIVE_API_BASE=(location.protocol.startsWith("http")&&! ["localhost","127.0.0.1"].includes(location.hostname)&&!location.hostname.endsWith("github.io")?location.origin:"https://football-0kb6.onrender.com");
 let LIVE_QUESTIONS=[],LIVE_SYNC_STATUS="يتم فحص تحديثات كرة القدم…",LIVE_UPDATED_AT=null,LIVE_SYNC_BUSY=false;
@@ -233,7 +233,7 @@ function onMsg(m){
 }
 /* ---------- الإعدادات ---------- */
 function setup(){
- const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["p","من هو اللاعب؟ (تلميحات) في كل جولة"],["tp","لاعب من انتقالاته في كل جولة"],["g","أسئلة عامة في كل جولة"],["t","أسئلة انتقالات في كل جولة"]];
+ const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["g","أسئلة عامة في كل جولة"],["t","أسئلة انتقالات في كل جولة"]];
  const isLocal=!on;
  const modeUI=isLocal?`<div class="card"><h2>اختر نمط اللعب</h2><div class="tabs">
  <button class="${PLAYMODE==='ffa'?'on':''}" onclick="PLAYMODE='ffa';setup()">واحد ضد واحد</button>
@@ -249,18 +249,18 @@ function setup(){
  ${modeUI}${participants}
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
- <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div><small id="liveStatus">${esc(LIVE_SYNC_STATUS)}</small></div>
+ <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 1000 سؤال لكل فقرة (500 متوسط + 500 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div><small id="liveStatus">${esc(LIVE_SYNC_STATUS)}</small></div>
  <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، وتصبح الأسئلة متاحة مجدداً في مباراة جديدة بعد انتهاء المباراة الحالية.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
 }
 function bankStatsHTML(){
- const labels={p:"من هو اللاعب؟",tp:"لاعب من انتقالاته",g:"أسئلة عامة",t:"أسئلة انتقالات"};
- const src={p:D.p||[],tp:D.tp||[],g:(D.g||[]).concat(QUESTION_BANK),t:(D.t||[]).concat(LIVE_QUESTIONS)};
+ const labels={g:"أسئلة عامة",t:"أسئلة انتقالات"};
+ const src={g:(D.g||[]).concat(QUESTION_BANK),t:(D.t||[]).concat(LIVE_QUESTIONS)};
  return Object.keys(labels).map(k=>{
   const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
   const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
-  const ok=m>=250&&h>=250;
-  return `<div class="row"><span>${labels[k]}</span><b>${total}/500</b></div><small>${m}/250 متوسط · ${h}/250 صعب جداً ${ok?'✓':'— يحتاج أسئلة إضافية'}</small>`;
+  const ok=m>=500&&h>=500;
+  return `<div class="row"><span>${labels[k]}</span><b>${total}/1000</b></div><small>${m}/500 متوسط · ${h}/500 صعب جداً ${ok?'✓':'— البنك لم يكتمل بعد'}</small>`;
  }).join("");
 }
 function addName(){const v=document.getElementById("nm").value.trim();if(v&&D.names.length<12){D.names.push(v);save()}setup()}
@@ -284,9 +284,9 @@ function start(){
   if(!a||!b){alert('أدخل اسم المتنافسين');return}C=[{n:a,id:null},{n:b,id:null}];D.names=[a,b];save();
  }
  if(!C.length){alert('أضف لاعباً واحداً على الأقل');return}
- const c=D.cfg,st={},rounds=[],seen=new Set(),usedNow=[];
+ const c=D.cfg,st={},rounds=[],seen=new Set(),usedNow=[];c.p=0;c.tp=0;
  const source=k=>k==="g"?D.g.concat(QUESTION_BANK):k==="t"?D.t.concat(LIVE_QUESTIONS):D[k];
- const kinds=["p","tp","g","t"],MAX_MATCH_QUESTIONS=100;
+ const kinds=["g","t"],MAX_MATCH_QUESTIONS=100;
  const queues={};
  let requested=0;
  for(const k of kinds){
@@ -408,17 +408,13 @@ function editor(msg){
  const f=(id,p)=>`<input class="in" id="${id}" placeholder="${p}">`;
  const sel=`<select class="in" id="df"><option value="m">متوسط</option><option value="h">صعب</option></select>`;
  let form="";
- if(tab==="p")form=f("n","اسم اللاعب")+f("c1","التلميح 1 (الأصعب)")+f("c2","التلميح 2")+f("c3","التلميح 3 (الأسهل)");
- else if(tab==="tp")form=f("n","اسم اللاعب")+`<select class="in" id="ps"><option value="active">لاعب حالي</option><option value="retired">لاعب معتزل</option></select>`+`<select class="in" id="pp"><option>مهاجم</option><option>وسط</option><option>مدافع</option><option>حارس مرمى</option></select>`+f("pa","كل الأندية بالترتيب حتى آخر نادٍ، افصل بينها بفاصلة ،");
- else form=f("q","نص السؤال")+f("a","الجواب");
- $.innerHTML=`<h1>إضافة محتوى</h1><div class="tabs">${[["g","عامة"],["t","انتقالات"],["p","لاعب"],["tp","من الانتقالات"]].map(([k,t])=>`<button class="${tab===k?"on":""}" onclick="tab='${k}';editor()">${t}</button>`).join("")}</div>
+ form=f("q","نص السؤال")+f("a","الجواب");
+ $.innerHTML=`<h1>إضافة محتوى</h1><div class="tabs">${[["g","أسئلة عامة"],["t","أسئلة انتقالات"]].map(([k,t])=>`<button class="${tab===k?"on":""}" onclick="tab='${k}';editor()">${t}</button>`).join("")}</div>
  <div class="card">${form}${sel}<button class="pri" style="margin-top:8px" onclick="add()">حفظ</button><small>${msg||""}</small><br><small>المحفوظ في هذا القسم: ${D[tab].length}</small></div><button class="w" onclick="home()">رجوع</button>`;
 }
 function add(){
  const v=id=>document.getElementById(id).value.trim(),d=v("df");
- if(tab==="p"){if(!v("n")||!v("c1"))return editor("أدخل الاسم وتلميحاً واحداً على الأقل");D.p.push({d,n:v("n"),c:[v("c1"),v("c2"),v("c3")].filter(Boolean)})}
- else if(tab==="tp"){const pa=v("pa").split(/[،,]/).map(x=>x.trim()).filter(Boolean);if(!v("n")||pa.length<1)return editor("أدخل الاسم ونادياً واحداً على الأقل");D.tp.push({d,n:v("n"),status:document.getElementById("ps").value,pos:document.getElementById("pp").value,path:pa})}
- else{if(!v("q")||!v("a"))return editor("املأ السؤال والجواب");D[tab].push({d,q:v("q"),a:v("a")})}
+ if(!["g","t"].includes(tab))tab="g";if(!v("q")||!v("a"))return editor("املأ السؤال والجواب");D[tab].push({d,q:v("q"),a:v("a")});
  save();editor("تمت الإضافة ✓");
 }
 try{const cachedLive=JSON.parse(localStorage.getItem("fbq_live_cache_v1")||"null");if(cachedLive&&Array.isArray(cachedLive.players))applyLiveFootballPayload(cachedLive)}catch(e){}
