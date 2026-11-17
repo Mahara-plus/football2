@@ -192,7 +192,7 @@ function setup(){
  ${modeUI}${participants}
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
- <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 500 سؤال لكل قسم (250 متوسط + 250 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div></div>
+ <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 2000 سؤال لكل قسم (1000 متوسط + 1000 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div></div>
  <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، وتصبح الأسئلة متاحة مجدداً في مباراة جديدة بعد انتهاء المباراة الحالية.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
 }
@@ -202,7 +202,7 @@ function bankStatsHTML(){
  return Object.keys(labels).map(k=>{
   const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
   const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
-  const target=k==="g"?1000:250;
+  const target=1000;
   const ok=m>=target&&h>=target;
   return `<div class="row"><span>${labels[k]}</span><b>${total}/${target*2}</b></div><small>${m}/${target} متوسط · ${h}/${target} صعب جداً ${ok?'✓':'— يحتاج أسئلة إضافية'}</small>`;
  }).join("");
