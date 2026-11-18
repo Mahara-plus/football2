@@ -233,7 +233,7 @@ function onMsg(m){
 }
 /* ---------- الإعدادات ---------- */
 function setup(){
- const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["g","أسئلة عامة في كل جولة"],["t","أسئلة انتقالات في كل جولة"]];
+ const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["g","عدد أسئلة في كل جولة"]];
  const isLocal=!on;
  const modeUI=isLocal?`<div class="card"><h2>اختر نمط اللعب</h2><div class="tabs">
  <button class="${PLAYMODE==='ffa'?'on':''}" onclick="PLAYMODE='ffa';setup()">واحد ضد واحد</button>
@@ -249,19 +249,9 @@ function setup(){
  ${modeUI}${participants}
  <div class="card"><h2>الإعدادات</h2>${L.map(([k,t])=>`<div class="row"><span>${t}</span><input type="number" min="0" max="20" value="${c[k]}" onchange="D.cfg.${k}=Math.max(0,+this.value);save()"></div>`).join("")}
  <div class="row"><span>مستوى الصعوبة</span><select style="width:130px" onchange="D.cfg.diff=this.value;save()">${[["x","متوسط + صعب جداً"],["m","متوسط"],["h","صعب جداً"]].map(([v,t])=>`<option value="${v}" ${c.diff===v?"selected":""}>${t}</option>`).join("")}</select></div>
- <div class="card"><b>حجم بنك الأسئلة المطلوب لكل قسم</b><small>الهدف: 1000 سؤال لكل فقرة (500 متوسط + 500 صعب جداً).</small><div id="bankStats">${bankStatsHTML()}</div><small id="liveStatus">${esc(LIVE_SYNC_STATUS)}</small></div>
+ <small id="liveStatus">${esc(LIVE_SYNC_STATUS)}</small></div>
  <small>الحد الأقصى 100 سؤال في المباراة. يمنع تكرار السؤال داخل الجولة أو بين الجولات، وتصبح الأسئلة متاحة مجدداً في مباراة جديدة بعد انتهاء المباراة الحالية.</small></div>
  <button class="pri" onclick="start()">ابدأ اللعب</button><button class="w" onclick="home()">رجوع</button>`;
-}
-function bankStatsHTML(){
- const labels={g:"أسئلة عامة",t:"أسئلة انتقالات"};
- const src={g:(D.g||[]).concat(QUESTION_BANK),t:(D.t||[]).concat(LIVE_QUESTIONS)};
- return Object.keys(labels).map(k=>{
-  const seen=new Set(),rows=src[k].filter(x=>{const id=questionKey(k,x);if(seen.has(id))return false;seen.add(id);return true;});
-  const m=rows.filter(x=>x.d==="m").length,h=rows.filter(x=>x.d==="h").length,total=m+h;
-  const ok=m>=500&&h>=500;
-  return `<div class="row"><span>${labels[k]}</span><b>${total}/1000</b></div><small>${m}/500 متوسط · ${h}/500 صعب جداً ${ok?'✓':'— البنك لم يكتمل بعد'}</small>`;
- }).join("");
 }
 function addName(){const v=document.getElementById("nm").value.trim();if(v&&D.names.length<12){D.names.push(v);save()}setup()}
 function delName(i){D.names.splice(i,1);save();setup()}
@@ -288,26 +278,15 @@ function start(){
  const source=k=>k==="g"?D.g.concat(QUESTION_BANK):k==="t"?D.t.concat(LIVE_QUESTIONS):D[k];
  const kinds=["g","t"],MAX_MATCH_QUESTIONS=100;
  const queues={};
- let requested=0;
  for(const k of kinds){
   const all=source(k).filter(x=>(x.d==="m"||x.d==="h")&&(c.diff==="x"||x.d===c.diff));
   const unique=[],local=new Set();
   for(const x of all){const key=questionKey(k,x);if(!local.has(key)&&!seen.has(key)){local.add(key);unique.push(x);}}
   queues[k]=sh(unique);
-  requested+=Math.max(0,c.rounds*c[k]);
  }
- // A match can use up to 100 distinct questions. Never recycle an already-used
- // question to satisfy a category quota; use the remaining fresh questions instead.
- const target=Math.min(MAX_MATCH_QUESTIONS,requested);
- const selected=[];
- for(const k of kinds){
-  const need=Math.max(0,c.rounds*c[k]);
-  for(let i=0;i<need&&selected.length<target&&queues[k].length;i++)selected.push({t:k,d:queues[k].pop()});
- }
- if(selected.length<target){
-  const fallback=sh(kinds.flatMap(k=>queues[k].map(d=>({t:k,d}))));
-  for(const item of fallback){if(selected.length>=target)break;selected.push(item);}
- }
+ // العدد المحدد هو إجمالي الأسئلة في الجولة، من الفقرتين معاً.
+ const target=Math.min(MAX_MATCH_QUESTIONS,Math.max(0,c.rounds*c.g));
+ const selected=sh(kinds.flatMap(k=>queues[k].map(d=>({t:k,d})))).slice(0,target);
  if(!selected.length){alert('لا توجد أسئلة جديدة متاحة. أضف أسئلة جديدة إلى البنك لمتابعة اللعب دون تكرار.');return;}
  const answerOf=(k,d)=>k==="p"||k==="tp"?d.n:d.a;
  const playerRole=(player)=>{
@@ -325,7 +304,15 @@ function start(){
   "حارس مرمى":["جيانلويجي بوفون","إيكر كاسياس","مانويل نوير","بيتر شمايكل","أوليفر كان","تيبو كورتوا","أليسون بيكر","إدوين فان دير سار"]
  };
  const optionsFor=(k,d)=>{
-  const correct=answerOf(k,d);let pool=[];
+  const correct=answerOf(k,d);
+  // Prefer the question's own curated options for every quiz category.
+  // This prevents unrelated answers from other questions being mixed in.
+  if((k==="g"||k==="t")&&Array.isArray(d.opts)&&d.opts.length){
+   const saved=[...new Set(d.opts.map(x=>String(x).trim()).filter(Boolean))];
+   if(correct==="نعم"||correct==="لا")return sh(["نعم","لا"]);
+   if(saved.includes(String(correct)))return sh(saved);
+  }
+  let pool=[];
   if(k==="p"){
    const role=playerRole(d);
    const sameRole=[...D.p,...D.tp].filter(x=>x.n!==d.n&&playerRole(x)===role).map(x=>x.n);
@@ -339,9 +326,21 @@ function start(){
    if(Array.isArray(d.opts))pool=d.opts;
    else {const isFee=/مليون|€|دولار|جنيه/.test(String(correct));
    pool=isFee?D.t.map(x=>x.a).filter(x=>/مليون|€|دولار|جنيه/.test(String(x))).concat(["180 مليون يورو","150 مليون يورو","105 مليون يورو","90 مليون يورو","75 مليون يورو","60 مليون يورو"]):D.tp.flatMap(x=>x.path||[]).concat(D.t.map(x=>x.a).filter(x=>!(/مليون|€|دولار|جنيه/.test(String(x)))));}
-  }else if(k==="g"&&d.category){pool=QUESTION_BANK.filter(x=>x.category===d.category&&x.d===d.d).map(x=>x.a)}
+  }else if(k==="g"&&Array.isArray(d.opts)&&d.opts.length){pool=d.opts}
+  else if(k==="g"&&d.category){pool=QUESTION_BANK.filter(x=>x.category===d.category&&x.d===d.d).map(x=>x.a)}
   else if(Array.isArray(d.opts))pool=d.opts;
   else pool=source(k).map(x=>answerOf(k,x));
+  // Keep answer choices in the same semantic family (e.g. formations with formations,
+  // clubs with clubs, countries with countries), instead of mixing unrelated answers.
+  const answerText=String(correct||"").trim();
+  const isFormation=v=>/^\d{1,2}\s*[-–]\s*\d{1,2}(?:\s*[-–]\s*\d{1,2}){0,2}$/.test(String(v||"").trim());
+  const isNumber=v=>/^\d+(?:[.,]\d+)?(?:\s|$)/.test(String(v||"").trim());
+  const clubNames=["ريال مدريد","برشلونة","مانشستر يونايتد","مانشستر سيتي","ليفربول","أرسنال","تشيلسي","توتنهام","بايرن ميونخ","بوروسيا دورتموند","يوفنتوس","ميلان","إنتر ميلان","باريس سان جيرمان","أتلتيكو مدريد","أياكس","بنفيكا","بورتو","نابولي","روما","مارسيليا","الهلال","النصر","الأهلي","الاتحاد"];
+  const isClub=v=>clubNames.includes(String(v||"").trim());
+  if(isFormation(answerText)) pool=pool.filter(isFormation);
+  else if(isNumber(answerText)) pool=pool.filter(isNumber);
+  else if(isClub(answerText)) pool=pool.filter(isClub);
+  else if(answerText==="نعم"||answerText==="لا") pool=["نعم","لا"];
   pool=[...new Set(pool.filter(x=>x&&x!==correct))];
   const distractors=sh(pool).slice(0,3);
   return sh([correct,...distractors]);

@@ -147,7 +147,7 @@ function onMsg(m){
 }
 /* ---------- الإعدادات ---------- */
 function setup(){
- const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["p","من هو اللاعب؟ (تلميحات) في كل جولة"],["tp","لاعب من انتقالاته في كل جولة"],["g","أسئلة عامة في كل جولة"],["t","أسئلة انتقالات في كل جولة"]];
+ const c=D.cfg,on=NET&&NET.host,L=[["rounds","عدد الجولات"],["g","عدد أسئلة في كل جولة"]];
  const isLocal=!on;
  const modeUI=isLocal?`<div class="card"><h2>اختر نمط اللعب</h2><div class="tabs">
  <button class="${PLAYMODE==='ffa'?'on':''}" onclick="PLAYMODE='ffa';setup()">واحد ضد واحد</button>
